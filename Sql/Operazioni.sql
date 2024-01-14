@@ -12,20 +12,20 @@ CREATE PROCEDURE rating_assoluto (IN _idFilm INT, OUT _rating FLOAT)
     DECLARE _mediaRecensioniUtente, _mediaRecensioniCritica FLOAT;
     DECLARE _premiFilm, _premiAttori, _premiRegista FLOAT;
     SET _mediaRecensioniUtente = (SELECT MediaRecensioni from Film Where Codice = _idFilm);
-	SET _mediaRecensioniCritica = (Select SUM(Valore)/(count(*))
+	SET _mediaRecensioniCritica = (Select ifnull(SUM(Valore)/(count(*)), 0)
 									From recensione R
                                     Where R.Film = _idFilm);
-    SET _premiFilm = (Select sum(P.Valore)
+    SET _premiFilm = (Select ifnull(sum(P.Valore), 0)
 					FROM Vincita V  inner join Premio P on V.Premio = P.Tipo
                     WHERE V.Film = _idFilm);
                     
-	SET _premiAttori = (Select sum(P.Valore)
+	SET _premiAttori = (Select ifnull(sum(P.Valore), 0)
 						FROM Vincita V inner join premiazioneattore PA on V.Codice = PA.Vincita inner join premio P on V.Premio = P.Tipo
                         Where V.Film <> _idFilm and PA.Attore IN (Select P.Attore from Partecipazione P Where P.Film = _idFilm));
                         
-	SET _premiRegista = (Select sum(P.Valore)
+	SET _premiRegista = (Select ifnull(sum(P.Valore), 0)
 						FROM Vincita V inner join premiazioneregista PR on V.Codice = PR.Vincita inner join premio P on V.Premio = P.Tipo
-                        Where V.Film <> _idFilm and PR.Attore = (Select F.Regista From Film F where F.Codice = _idFilm));
+                        Where V.Film <> _idFilm and PR.Regista = (Select F.Regista From Film F where F.Codice = _idFilm));
 	
 	
     SET _rating = (_mediaRecensioniUtente + 1.2 * (_mediaRecensioniCritica)) / (1 + 1.2) + (_premiFilm + 0.5 * _premiAttori + 0.8 * _premiRegista)/10;
@@ -46,7 +46,7 @@ DELIMITER \\
 
 Create procedure Generi_Film (IN _idFilm INT)
 BEGIN
-SELECT A.Nome
+SELECT A.Genere
 	FROM Appartenenza A
     WHERE A.Film = _idFilm;
  END \\
@@ -57,7 +57,7 @@ DELIMITER ;
 -- -----------------------------------------
 DROP PROCEDURE if exists Inserimento_Nuovo_Acquisto;
 DELIMITER \\
-create procedure Inserimento_Nuovo_Acquisto(IN _numCarta INT , _tipoAbbonamento INT, out _successo BOOL)
+create procedure Inserimento_Nuovo_Acquisto(IN _numCarta bigINT , _tipoAbbonamento INT, out _successo BOOL)
 	begin
     declare counter int default 1;
     declare _costo int;
@@ -226,7 +226,7 @@ BEGIN
 					AC.InizioAbbonamento = (select max(InizioAbbonamento)
 											From Acquisto
                                             Where Utente = (Select Utente from connessione where Inizio = _InizioC and Dispositivo = _DispositivoC)
-					and Date(V.Inizio) > AC.InizioAbbonamento
+					and Date(V.Inizio) >= AC.InizioAbbonamento
                 ));
 
     SET _MaxGB = (select AB.MaxGB
@@ -359,7 +359,7 @@ pref_loop: LOOP
 							from partecipazione P
                             Where P.Attore IN (select Attore
 												from Partecipazione
-                                                Where Film = _codiceFilm)) / (select Count(*)
+                                                Where Film = _codiceFilm)) / (select IF(Count(*) = 0, 1, Count(*))
 																				from Partecipazione
                                                                                 Where Film = _CodiceFilm));
 			IF PA > 10 THEN
@@ -377,7 +377,7 @@ pref_loop: LOOP
 			END IF;
         elseif _preferenza = 'Classici' THEN
 			set _preferenzeSelezionate = _preferenzeSelezionate + 1;
-            set CL = 0.129 * (year(curdate()) - (select AnnoDiProduzione
+            set CL = 0.129 * (year(curdate()) - (select AnnoProduzione
 										from film
 										where codice = _CodiceFilm));
 			IF CL > 10 THEN
@@ -397,9 +397,9 @@ pref_loop: LOOP
 				
                 SET BB = 0;
             ELSE
-				SET BB =5 * (log((select count(*)
+				SET BB =5 * (log((select if(count(*) < 1, 1, count(*))
 						from Visualizzazione V natural join filmcodificato FC
-						Where FC.film = _codiceFilm)) / LOG(VM));
+						Where FC.film = _codiceFilm)) / LOG(if(VM < 2, 2, VM)));
 			END IF;
 			IF BB > 10 THEN
 				SET BB = 10;
@@ -413,24 +413,25 @@ pref_loop: LOOP
     SET VSG = (Select Count(Distinct V.Inizio, V.InizioConnessione, V.dispositivoConnessione)
 				from Visualizzazione V natural join filmcodificato FC natural join film F natural join appartenenza A 
 					inner join connessione C ON C.Inizio = V.InizioConnessione and C.dispositivo = V.DispositivoConnessione
-                Where C.Utente = _codiceUtente and A.Genere IN (select * from appartenenza where film = _codiceFilm)) / 
-					(select count(*)
+                Where C.Utente = _codiceUtente and A.Genere IN (select Genere from appartenenza where film = _codiceFilm)) / 
+					(select if(count(*) = 0, 1, count(*))
 					from visualizzazione V inner join connessione C on C.Inizio = V.InizioConnessione and C.dispositivo = V.DispositivoConnessione
                     Where C.Utente = _codiceUtente) * 10;
 	
-    SET PrA = (Select AVG(cnt) -- questo forse non funziona, aspettare il popolamento per fare dei check
-				from (Select Count(distinct V.Inizio, V.InizioConnessione, V.DispositivoConnessione) / (select(COUNT(*))
-																								from Visualizzazione V inner join connessione C ON C.Inizio = V.InizioConnessione and C.dispositivo = V.DispositivoConnessione
-																								WHERE C.Utente =_codiceUtente) as cnt
-				from Visualizzazione V inner join connessione C ON C.Inizio = V.InizioConnessione and C.dispositivo = V.DispositivoConnessione
-					inner join filmcodificato FC on FC.Codice = V.FilmCodificato inner join Film F on F.Codice = FC.Film 
-						inner join partecipazione P on P.Film = F.Film
-				Where C.Utente = _codiceUtente and P.Attore IN (select Attore
-																from partecipazione
-                                                                Where Film = _codiceFilm)
-				group by P.Attore
-			) AS conto_attore) * 10;
-	SET _rating = ROUND((PesoVar * rating_assoluto + PesoVar * VSG + PesoVar * PrA + PPA + CL + BB) / 10);
+    SET PrA = (
+			Select AVG(cnt) 
+			from (Select Count(distinct V.Inizio, V.InizioConnessione, V.DispositivoConnessione) / (select(if(COUNT(*) = 0, 1, count(*)))
+												from Visualizzazione V inner join connessione C ON C.Inizio = V.InizioConnessione and C.dispositivo = V.DispositivoConnessione
+																											WHERE C.Utente ='U1') as cnt
+							from Visualizzazione V inner join connessione C ON C.Inizio = V.InizioConnessione and C.dispositivo = V.DispositivoConnessione
+								inner join filmcodificato FC on FC.Codice = V.FilmCodificato inner join Film F on F.Codice = FC.Film 
+									inner join partecipazione P on P.Film = F.Codice
+							Where C.Utente = 'U1' and P.Attore IN (select Attore
+																			from partecipazione
+																			Where Film = 1)
+							group by P.Attore)
+							AS conto_attore) * 10;
+	SET _rating = ROUND((PesoVar * rating_assoluto + PesoVar * VSG + PesoVar * PrA + PA + CL + BB) / 10);
 END \\
 DELIMITER ;
 
@@ -448,24 +449,24 @@ BEGIN
 declare finito int default 0;
 declare _film int;
 declare _Punti int;
-
+declare RP int;
 declare cur cursor for
 	with FilmCodificatiRaccomandabili as (
 		select FC.Codice, FC.Lunghezza, FC.Dimensione, FV.Risoluzione, FC.FormatoVideo, FC.FormatoAudio 
 		from filmcodificato FC left outer join restrizioneformato RF on FC.Codice = RF.FilmCodificato inner join formatovideo FV on (FC.FormatoVideo = FV.Codice)
-		Where RF.Stato <> (select Stato from Residenza where Utente = _codiceUtente) 
+		Where RF.Stato <> (select Stato from Utente where Codice = _codiceUtente) 
 			and FV.Risoluzione < (select ifnull(AB.MaxRisoluzione, 99999)
-									from Abbonamento AB natural join Acqusto AC
+									from Abbonamento AB inner join Acquisto AC on AB.Tipo = AC.abbonamento
 									Where AC.Utente = _codiceUtente and AC.InizioAbbonamento = (select max(InizioAbbonamento)
 																								from Acquisto 
 																								where Utente = _codiceUtente))
 	),
-	FilmVisualizzati as (
+    FilmVisualizzati as (
 		select distinct F.Codice
-        from Visualizzazione V natural join filmcodificato FC natural join film F 
+        from Visualizzazione V inner join filmcodificato FC on V.FilmCodificato = FC.Codice inner join film F on FC.Film = F.Codice
 			inner join Connessione C on V.InizioConnessione = C.Inizio and V.DispositivoConnessione = C.Dispositivo
 		where C.Utente = _codiceUtente
-    ),
+        ),
     FilmCodificaAmmissibili as (
 		select FC.Codice as CodiceCodificato, F.Codice as Film, FC.FormatoVideo, FV.AspectRatio, FV.Risoluzione
         from film F inner join filmcodificato FC on FC.film = F.Codice inner join formatovideo FV on FC.FormatoVideo = FV.Codice
@@ -505,8 +506,7 @@ declare cur cursor for
         where FCA.AspectRatio = (select AspectRatio
 								from DispositivoPiuUsato)
     )
--- sussy per i conti
-	select FCA.Film, MAX(Punteggio) as Punti
+	select FCA.Film, MAX(PunteggioParziale) as Punti
 	from (select FCA.CodiceCodificato, COUNT(if(FR.CodiceCodificato IS NULL, 0, 1)) + COUNT(if(FAR.CodiceCodificato is null, 0, 1)) +
 			COUNT(if(FLP.LinguaTop is null, 0, 5)) as PunteggioParziale
 	from FilmCodificaAmmissibili FCA left outer join FilmInRisoluzioneGiusta FR on FCA.CodiceCodificato = FR.CodiceCodificato
@@ -534,7 +534,7 @@ scan: loop
     if finito = 1 then
 		leave scan;
 	END IF;
-	call rating_personalizzato(_codiceUtente, _codiceFilm, RP);
+	call rating_personalizzato(_codiceUtente, _film, RP);
     insert into punteggi
     values (_film, RP + _Punti);
     
@@ -543,7 +543,7 @@ close cur;
 
 select Film
 from punteggi 
-order by punteggio
+order by Punteggio
 limit 10;
 drop temporary table punteggi;
 
@@ -554,7 +554,6 @@ DELIMITER ;
 -- -----------------------------
 -- Caching
 -- -----------------------------
--- Per ora è fatto copiando la raccomandazione contenuti
 DROP PROCEDURE IF EXISTS Caching;
 DELIMITER \\
 CREATE PROCEDURE caching(in _codiceUtente VARCHAR(255))
@@ -577,9 +576,9 @@ declare cur cursor for
 	with FilmCodificatiRaccomandabili as (
 		select FC.Codice, FC.Lunghezza, FC.Dimensione, FV.Risoluzione, FC.FormatoVideo, FC.FormatoAudio 
 		from filmcodificato FC left outer join restrizioneformato RF on FC.Codice = RF.FilmCodificato inner join formatovideo FV on (FC.FormatoVideo = FV.Codice)
-		Where RF.Stato <> (select Stato from Residenza where Utente = _codiceUtente) 
+		Where RF.Stato <> (select Stato from Utente where Codice= _codiceUtente) 
 			and FV.Risoluzione < (select ifnull(AB.MaxRisoluzione, 99999)
-									from Abbonamento AB natural join Acqusto AC
+									from Abbonamento AB inner join Acquisto AC on AC.Abbonamento = AB.Tipo
 									Where AC.Utente = _codiceUtente and AC.InizioAbbonamento = (select max(InizioAbbonamento)
 																								from Acquisto 
 																								where Utente = _codiceUtente))
@@ -641,7 +640,7 @@ PunteggioCodifica as (
 	group by FCA.CodiceCodificato
     ),
 PunteggioFilm as (
-	select FCA.Film, MAX(Punteggio) as Punti
+	select FCA.Film, MAX(P.PunteggioParziale) as Punti
 	from PunteggioCodifica P inner join FilmCodificaAmmissibili FCA on P.CodiceCodificato = FCA.CodiceCodificato
     group by FCA.Film
 )
@@ -779,7 +778,6 @@ begin
         IF (FINITO = 1) THEN 
 			LEAVE scan;
 		END IF;
-        -- Possibile Ottimizzazione: se il vecchio server è uguale al server corrente, non serve ricalcolare
         SET closest_server = (select S.Codice
 							From Server S
                                 Where Calcola_Distanza(S.latitudine, S.Longitudine, (select Latitudine
@@ -811,6 +809,7 @@ DELIMITER ;
 
 DROP procedure IF EXISTS Custom_Analytic;
 DELIMITER \\
+
 CREATE procedure Custom_Analytic()
 BEGIN
 	declare finito int default 0;
@@ -850,31 +849,33 @@ BEGIN
     
     select VPC.Genere, SD.Durata, SP.PaeseDiProduzione, SA.AnnoProduzione
     from valoriPiuComuni VPC inner join SommeDurata SD on VPC.genere = SD.Genere inner join sommePaese SP on VPC.Genere = SP.Genere inner join SommeAnno SA on SA.Genere = VPC.Genere
-    Where VPC.MaxDurata = SD.ContoDurata and VPC.MaxPaese = SP.ContoPaese and VPC.MaxAnno = SA.MaxAnno;
+    Where VPC.MaxDurata = SD.ContoDurata and VPC.MaxPaese = SP.ContoPaese and VPC.MaxAnno = SA.ContoAnno;
 	
     
     declare continue handler for not found set finito = 1;
-    drop temporary table if exists `provvisioria`;
-    create temporary table `provvisoria`(
-		`Genere` VARCHAR(63),
-        `Durata` VARCHAR(15),
-        `PaeseDiProduzione` VARCHAR(255),
-        `AnnoProduzione` INT,
+    
+    drop temporary table if exists `provvisoriacu`;
+    create temporary table `provvisoriacu`(
+		`Genere` VARCHAR(63) NOT NULL,
+        `Durata` VARCHAR(15) NOT NULL,
+        `PaeseDiProduzione` VARCHAR(255) NOT NULL,
+        `AnnoProduzione` INT NOT NULL,
         PRIMARY KEY (`Genere`)
     );
+    open cur;
     scan: loop
 		fetch cur into _Genere, _Durata, _Stato, _Anno;
         IF (finito = 1) THEN
 			LEAVE scan;
 		END IF;
         
-        replace into `provvisoria`
+        replace into `provvisoriacu`
         values (_Genere, _Durata, _Stato, _Anno);
     end loop;
 	
 select *
-From Provvisoria;
-drop temporary table provvisoria;
+From provvisoriacu;
+drop temporary table `provvisoriacu`;
 END \\
 
 DELIMITER ;
@@ -886,11 +887,11 @@ DROP PROCEDURE IF EXISTS classifica_stato;
 DELIMITER \\
 CREATE PROCEDURE classifica_stato()
 begin
-	
 		with VisualizzazioniFilm as (
 			select F.Codice, U.Stato, COUNT(*) as Visualizzazioni
-            from Film F natural join FilmCodificato FC natural join visualizzazione V inner join Connessione C on C.Inizio = V.InizioConnessione and C.Dispositivo = V.DispositivoConnessione
-				inner join Utente U on C.Utente = U.Codice
+            from Film F natural join FilmCodificato FC inner join visualizzazione V on FC.Codice = V.FilmCodificato 
+				inner join Connessione C on C.Inizio = V.InizioConnessione and C.Dispositivo = V.DispositivoConnessione
+					inner join Utente U on C.Utente = U.Codice
             group by F.Codice, U.Stato
         ), FilmCodificatoVisualizzazioni as (
 			select FC.Codice, FC.Film, U.Stato, Count(*) as Visualizzazioni
@@ -902,7 +903,7 @@ begin
 			select VF.Stato, VF.Codice, VF.Visualizzazioni, FCV.Codice as CodiceCodificato, FCV.Visualizzazioni as VisualizzazioniContenuto
             from VisualizzazioniFilm VF inner join FilmCodificatoVisualizzazioni FCV on VF.Codice = FCV.Codice and VF.Stato = FCV.Stato
         )
-        select FFC.Stato, FFC.Codice, RANK() OVER(Partition by FFC.Stato ORDER BY (Visualizzazioni)) as RankFilm, RANK()  OVER(Partition by FFC.Stato, FFC.Codice order by(VisualizzazioniContenuto))
+		select FFC.Codice, FFC.Stato, RANK() OVER(partition by FFC.Stato order by FFC.Visualizzazioni DESC) as RankStato
         from FilmFilmCodificatoVis FFC;
         
 END \\
@@ -914,24 +915,24 @@ CREATE PROCEDURE classifica_abbonamento()
 Begin
 	with visualizzazioniFilm as (
 		select FC.Film, A.Abbonamento, COUNT(*) as Visualizzazioni
-        from filmcodificato FC natural join visualizzazione V inner join connessione C  on C.Inizio = V.InizioConnessione and C.Dispositivo = V.DispositivoConnessione
+        from filmcodificato FC inner join visualizzazione V on V.FilmCodificato = FC.Codice inner join connessione C  on C.Inizio = V.InizioConnessione and C.Dispositivo = V.DispositivoConnessione
 				inner join Utente U on C.Utente = U.Codice inner join acquisto A on A.Utente = U.Codice
-		Where DAY(A.DataAbbonamento) < DAY(V.Inizio) and timestampdiff(DAY, V.Inizio, A.DataAbbonamento) =(select min(timestampdiff(Day, V.Inizio, A.DataAbbonamento))
+		Where DAY(A.InizioAbbonamento) <= DAY(V.Inizio) and timestampdiff(DAY, V.Inizio, A.InizioAbbonamento) =(select min(timestampdiff(Day, V.Inizio, A.InizioAbbonamento))
 																											from filmcodificato FC1 natural join visualizzazione V1 inner join connessione C1  on C1.Inizio = V1.InizioConnessione and C1.Dispositivo = V1.DispositivoConnessione
 																											inner join Utente U1 on C1.Utente = U1.Codice inner join acquisto A1 on A1.Utente = U1.Codice
-																											where DAY(A.DataAbbonamento) < DAY(V.Inizio) and FC1.Codice = FC.Codice and V.Inizio = V1.Inizio and V1.InizioConnessione = V.InizioConnessione
-																												and V.Dispositivo = V1.Dispositivo
+																											where DAY(A.InizioAbbonamento) <= DAY(V.Inizio) and FC1.Codice = FC.Codice and V.Inizio = V1.Inizio and V1.InizioConnessione = V.InizioConnessione
+																												and V.DispositivoConnessione = V1.DispositivoConnessione
                                                                                                             )
 		group by FC.Film, A.Abbonamento
     ), FilmCodificatoVisualizzazioni as (
 		select FC.Film,FC.Codice, A.Abbonamento, COUNT(*) as Visualizzazioni
-        from filmcodificato FC natural join visualizzazione V inner join connessione C  on C.Inizio = V.InizioConnessione and C.Dispositivo = V.DispositivoConnessione
+        from filmcodificato FC inner join visualizzazione V on FC.Codice = V.FilmCodificato join connessione C  on C.Inizio = V.InizioConnessione and C.Dispositivo = V.DispositivoConnessione
 				inner join Utente U on C.Utente = U.Codice inner join acquisto A on A.Utente = U.Codice
-		Where DAY(A.DataAbbonamento) < DAY(V.Inizio) and timestampdiff(DAY, V.Inizio, A.DataAbbonamento) = (select min(timestampdiff(Day, V.Inizio, A.DataAbbonamento))
+		Where DAY(A.InizioAbbonamento) <= DAY(V.Inizio)  and timestampdiff(DAY, V.Inizio, A.InizioAbbonamento) = (select min(timestampdiff(Day, V1.Inizio, A1.InizioAbbonamento))
 																											from filmcodificato FC1 natural join visualizzazione V1 inner join connessione C1  on C1.Inizio = V1.InizioConnessione and C1.Dispositivo = V1.DispositivoConnessione
 																											inner join Utente U1 on C1.Utente = U1.Codice inner join acquisto A1 on A1.Utente = U1.Codice
-																											where DAY(A.DataAbbonamento) < DAY(V.Inizio) and FC1.Codice = FC.Codice and V.Inizio = V1.Inizio and V1.InizioConnessione = V.InizioConnessione
-																												and V.Dispositivo = V1.Dispositivo
+																											where DAY(A.InizioAbbonamento) <= DAY(V.Inizio) and FC1.Codice = FC.Codice and V.Inizio = V1.Inizio and V1.InizioConnessione = V.InizioConnessione
+																												and V.DispositivoConnessione = V1.DispositivoConnessione
                                                                                                             )
 		group by FC.Film,FC.Codice, A.Abbonamento
     ),
@@ -939,7 +940,7 @@ Begin
 		select VF.Abbonamento, VF.Film, VF.Visualizzazioni, FCV.Codice as CodiceCodificato, FCV.Visualizzazioni as VisualizzazioniContenuto
 		from VisualizzazioniFilm VF inner join FilmCodificatoVisualizzazioni FCV on VF.Film = FCV.Codice and VF.Abbonamento = FCV.Abbonamento
 	)
-	select FFC.Stato, FFC.Film, RANK() OVER(Partition by FFC.Abbonamento ORDER BY (Visualizzazioni)) as RankFilm, RANK()  OVER(Partition by FFC.Abbonamento, FFC.Codice order by(VisualizzazioniContenuto))
+	select FFC.Film, FFC.abbonamento, RANK() OVER(Partition by FFC.Abbonamento ORDER BY (Visualizzazioni) DESC) as RankFilm, FFC.CodiceCodificato, RANK()  OVER(Partition by FFC.Abbonamento, FFC.CodiceCodificato order by(VisualizzazioniContenuto) DESC) as RankCodificato
 	from FilmFilmCodificatoVis FFC;
     
     
